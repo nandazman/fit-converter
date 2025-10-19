@@ -110,9 +110,7 @@ Split image into segments and return segment information without OCR processing.
 {
   "split_id": "uuid-string",
   "total_segments": 5,
-  "segment_info": [...],
-  "debug_url": "/api/debug/xyz789.png",
-  "segment_urls": ["/api/segment/split_id_0", "/api/segment/split_id_1", ...]
+  "segment_info": [...]
 }
 ```
 

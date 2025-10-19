@@ -106,14 +106,13 @@ def _extract_length_from_header(header_text: str, default: int = 50) -> int:
 # Robust metric extraction (anchored to labels)
 # =========================
 
-# labels anywhere in blob – tolerant spacing/line breaks
 _LABELS_ANYWHERE_RE = re.compile(
     r"Strokes?\D{0,10}(\d{1,3}).{0,60}?SWOLF\D{0,10}(\d{1,3}).{0,120}?(?:Pace[^0-9]*(.*))?",
     re.IGNORECASE | re.DOTALL,
 )
 
 def _numbers_plausible(strokes: int, swolf: int) -> bool:
-    return 5 <= strokes <= 120 and 50 <= swolf <= 300  # guard against 0/1 and tiny swolf
+    return 5 <= strokes <= 120 and 50 <= swolf <= 300
 
 
 def _extract_metrics_by_labels_anywhere(text: str) -> Optional[Tuple[int, int, int]]:
@@ -130,10 +129,6 @@ def _extract_metrics_by_labels_anywhere(text: str) -> Optional[Tuple[int, int, i
 
 
 def _extract_from_values_row(lines: List[str]) -> Optional[Tuple[int, int, int]]:
-    """
-    After finding a line with the labels, take the next 1–2 lines as the values row.
-    First int = Strokes, second int = SWOLF. Pace found by pattern.
-    """
     label_re = re.compile(r"\bStrokes?\b.*\bSWOLF\b", re.IGNORECASE)
     for i, ln in enumerate(lines):
         if label_re.search(ln):
@@ -145,17 +140,12 @@ def _extract_from_values_row(lines: List[str]) -> Optional[Tuple[int, int, int]]
                     if _numbers_plausible(strokes, swolf):
                         pace_sec = _extract_pace_seconds(row)
                         if pace_sec == 120:
-                            # try also the whole blob for pace
                             pace_sec = _extract_pace_seconds(" ".join(lines))
                         return strokes, swolf, pace_sec
     return None
 
 
 def _rescue_numbers_from_blob(text: str) -> Optional[Tuple[int, int]]:
-    """
-    If we still don't have good numbers, scan for the two integers
-    that appear AFTER the labels block; ignore time/pace suffixes.
-    """
     after = re.search(r"Strokes?.*?SWOLF", text, re.IGNORECASE | re.DOTALL)
     zone = text[after.end():] if after else text
     zone = re.sub(r"/\s*100\s*m", "", zone, flags=re.IGNORECASE)
@@ -168,24 +158,20 @@ def _rescue_numbers_from_blob(text: str) -> Optional[Tuple[int, int]]:
 
 
 def _extract_strokes_swolf_pace(text: str, lines: Optional[List[str]] = None) -> Tuple[int, int, int]:
-    # 1) global anchored search
     t = _extract_metrics_by_labels_anywhere(text)
     if t:
         return t
 
-    # 2) try values row immediately after labels
     if lines:
         t = _extract_from_values_row(lines)
         if t:
             return t
 
-    # 3) rescue from the blob (after labels)
     pair = _rescue_numbers_from_blob(text)
     pace_sec = _extract_pace_seconds(text)
     if pair:
         return pair[0], pair[1], pace_sec
 
-    # 4) last resort: grab plausible ints anywhere on the blob
     ints = [int(x) for x in re.findall(r"\b\d{1,3}\b", re.sub(r"/\s*100\s*m", "", text, flags=re.IGNORECASE))]
     plausible = [n for n in ints if 5 <= n <= 300]
     if len(plausible) >= 2:
@@ -194,7 +180,6 @@ def _extract_strokes_swolf_pace(text: str, lines: Optional[List[str]] = None) ->
             swolf = max(swolf, 50)
         return strokes, swolf, pace_sec
 
-    # 5) defaults (never 0/1)
     duration = _extract_time_seconds(text)
     strokes = 25
     swolf = max(50, strokes + duration)
@@ -208,7 +193,6 @@ def _postprocess_and_sort(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]
         segments.sort(key=lambda s: (s.get("y_top", 0), s.get("x_left", 0)))
     else:
         segments.sort(key=lambda s: (s.get("lap", 10**9)))
-    # renumber strictly increasing if needed
     laps = [s.get("lap") for s in segments]
     if not all(laps[i] is not None and laps[i + 1] is not None and laps[i] < laps[i + 1]
                for i in range(len(laps) - 1)):
@@ -228,12 +212,11 @@ def parse_segment_text(text: str, expected_lap: int) -> Optional[Dict[str, Any]]
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     blob = " ".join(lines)
 
-    # require Strokes & SWOLF; Pace is optional (OCR can drop it)
+    # need at least Strokes & SWOLF in the blob
     if not (re.search(r"\bStrokes?\b", blob, re.IGNORECASE) and
             re.search(r"\bSWOLF\b", blob, re.IGNORECASE)):
         return None
 
-    # find header line with stroke token
     header_line = None
     for ln in lines:
         if _detect_stroke(ln):
@@ -247,7 +230,6 @@ def parse_segment_text(text: str, expected_lap: int) -> Optional[Dict[str, Any]]
     lap_num = int(lap_m.group(1)) if lap_m else expected_lap
     lap_length = _extract_length_from_header(header_line, default=50)
 
-    # preferred parse: anchored to labels (anywhere)
     trio = _extract_metrics_by_labels_anywhere(blob)
     if not trio:
         trio = _extract_from_values_row(lines)
@@ -255,7 +237,6 @@ def parse_segment_text(text: str, expected_lap: int) -> Optional[Dict[str, Any]]
         trio = _extract_strokes_swolf_pace(blob, lines)
     strokes, swolf, pace_per_100m_sec = trio
 
-    # zero/one guard & re-rescue if needed
     if not _numbers_plausible(strokes, swolf):
         pair = _rescue_numbers_from_blob(blob)
         if pair and _numbers_plausible(pair[0], pair[1]):
@@ -332,7 +313,7 @@ def parse_ocr_data_structured(data: dict) -> List[Dict[str, Any]]:
             last_y = b["y"]
     flush()
 
-    # sweep lines → cards; advance to next header (no fixed +3)
+    # ---- FIX: build context from this header up to the next header (no hard cap) ----
     segments: List[Dict[str, Any]] = []
     i = 0
     while i < len(lines):
@@ -342,32 +323,29 @@ def parse_ocr_data_structured(data: dict) -> List[Dict[str, Any]]:
             i += 1
             continue
 
-        # gather a context window until (but not including) the next header
-        ctx_lines = [row]
+        # find the next header index
         j = i + 1
         while j < len(lines) and not _is_header_line(lines[j]["text"]):
-            ctx_lines.append(lines[j]["text"])
-            # stop after reasonable height (avoid merging two cards)
-            if len(ctx_lines) >= 4:
-                break
             j += 1
 
+        # take ALL lines from this header until (but not including) the next header
+        ctx_lines = [lines[k]["text"] for k in range(i, j)]
         ctx_blob = "  ".join(ctx_lines)
 
-        # need at least Strokes & SWOLF in the context
         if not (re.search(r"\bStrokes?\b", ctx_blob, re.IGNORECASE) and
                 re.search(r"\bSWOLF\b", ctx_blob, re.IGNORECASE)):
-            i += 1
-            continue
+            # if labels are noisy, try still to parse (fallback uses rescue logic)
+            seg = parse_segment_text("\n".join(ctx_lines), expected_lap=1)
+        else:
+            seg = parse_segment_text("\n".join(ctx_lines), expected_lap=1)
 
-        seg = parse_segment_text("\n".join(ctx_lines), expected_lap=1)
         if seg:
             seg["lap_length_m"] = _extract_length_from_header(row, default=50)
             seg["y_top"] = lines[i]["y_top"]
             seg["x_left"] = lines[i]["x_left"]
             segments.append(seg)
 
-        # move to next header we found (j) or just one step if none
+        # move to the next header found (j), or advance one if none
         i = j if j > i else i + 1
 
     segments = _postprocess_and_sort(segments)
@@ -410,7 +388,7 @@ def parse_text_simple(text: str) -> List[Dict[str, Any]]:
 
 
 # =========================
-# Region-based extraction (unchanged logic; keeps your debug flow)
+# Region-based extraction (unchanged)
 # =========================
 
 def extract_by_regions(image: np.ndarray, debug_img: np.ndarray) -> Tuple[List[Dict[str, Any]], np.ndarray]:
@@ -512,7 +490,6 @@ def extract_by_regions(image: np.ndarray, debug_img: np.ndarray) -> Tuple[List[D
 
         region = processed[ys:ye, xs:xe]
 
-        # OCR attempts
         text = ""
         for psm in (6, 4, 3):
             try:
@@ -525,10 +502,7 @@ def extract_by_regions(image: np.ndarray, debug_img: np.ndarray) -> Tuple[List[D
         seg = parse_segment_text(text, lap_counter)
         if not seg:
             orig = image[ys:ye, xs:xe]
-            if len(orig.shape) == 3:
-                g = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
-            else:
-                g = orig
+            g = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY) if len(orig.shape) == 3 else orig
             try:
                 _, bin_img = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             except Exception:
@@ -582,7 +556,6 @@ def extract_swimming_data_v2(image: np.ndarray) -> Tuple[List[Dict[str, Any]], n
     processed, debug_img = preprocess_for_small_text(image)
     all_candidates: List[Tuple[str, List[Dict[str, Any]], np.ndarray]] = []
 
-    # Strategy 1: Region-based
     try:
         segments, dbg = extract_by_regions(image, debug_img)
         if len(segments) >= 5:
@@ -593,7 +566,6 @@ def extract_swimming_data_v2(image: np.ndarray) -> Tuple[List[Dict[str, Any]], n
     except Exception as e:
         print(f"✗ Region extraction failed: {e}")
 
-    # Strategy 2: Tesseract data parsing on variants
     variants = [
         ("processed", processed),
         ("original_gray", cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image),
@@ -614,7 +586,6 @@ def extract_swimming_data_v2(image: np.ndarray) -> Tuple[List[Dict[str, Any]], n
             except Exception as e:
                 print(f"✗ {name} PSM {psm} failed: {e}")
 
-    # Strategy 3: Simple text
     for psm in (6, 4, 3, 11, 8):
         try:
             text = pytesseract.image_to_string(processed, config=f'--psm {psm} --oem 3')
@@ -627,7 +598,6 @@ def extract_swimming_data_v2(image: np.ndarray) -> Tuple[List[Dict[str, Any]], n
         except Exception as e:
             print(f"✗ Simple PSM {psm} failed: {e}")
 
-    # Strategy 4: Merge best candidates
     if all_candidates:
         best = max(all_candidates, key=lambda x: len(x[1]))
         _, segs, dbg = best
@@ -644,7 +614,6 @@ def extract_swimming_data_v2(image: np.ndarray) -> Tuple[List[Dict[str, Any]], n
         merged = _postprocess_and_sort(merged)
         return merged, dbg
 
-    # Nothing worked
     return [], debug_img
 
 

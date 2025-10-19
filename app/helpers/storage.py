@@ -7,11 +7,10 @@ import uuid
 
 
 class StorageManager:
-    """Manages in-memory storage for CSV data, debug images, and segments"""
+    """Manages in-memory storage for CSV data and segments"""
     
     def __init__(self):
         self.csv_storage: Dict[str, List[Dict[str, Any]]] = {}
-        self.debug_images: Dict[str, bytes] = {}
         self.segment_storage: Dict[str, Dict[str, Any]] = {}
     
     def store_csv(self, data: List[Dict[str, Any]]) -> str:
@@ -26,17 +25,6 @@ class StorageManager:
             raise KeyError("CSV not found")
         return self.csv_storage[csv_id]
     
-    def store_debug_image(self, image_bytes: bytes) -> str:
-        """Store debug image and return ID"""
-        debug_id = str(uuid.uuid4())
-        self.debug_images[debug_id] = image_bytes
-        return debug_id
-    
-    def get_debug_image(self, debug_id: str) -> bytes:
-        """Get debug image by ID"""
-        if debug_id not in self.debug_images:
-            raise KeyError("Debug image not found")
-        return self.debug_images[debug_id]
     
     def store_segment(self, segment_id: str, image_bytes: bytes, info: Dict[str, Any]) -> None:
         """Store segment image and info"""

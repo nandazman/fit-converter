@@ -13,7 +13,7 @@ from scipy.ndimage import gaussian_filter1d
 def split_image_into_segments(
     image: np.ndarray,
     laps_per_segment: int = 5,
-) -> Tuple[List[np.ndarray], List[Dict[str, Any]], np.ndarray]:
+) -> Tuple[List[np.ndarray], List[Dict[str, Any]]]:
     """
     Robust, size-adaptive lap splitter.
 
@@ -30,7 +30,7 @@ def split_image_into_segments(
     5) Segment strictly: every 5 laps per image (last may be fewer).
        - start slightly ABOVE the gap (keep header visible),
          end slightly ABOVE the next gap (avoid next-lap leak).
-    Returns: (segment_images [BGR], segment_info [dict], debug_image [BGR])
+    Returns: (segment_images [BGR], segment_info [dict])
     """
 
     # ---------- helpers ----------
@@ -164,10 +164,6 @@ def split_image_into_segments(
     segment_images: List[np.ndarray] = []
     segment_info: List[Dict[str, Any]] = []
 
-    debug_img = image.copy()
-    for y in boundaries:
-        cv2.line(debug_img, (0, int(y)), (w, int(y)), (128, 128, 128), 1)
-
     prev_end = 0
     for seg_idx in range(num_segments):
         start_lap_idx = seg_idx * laps_per_segment
@@ -183,13 +179,6 @@ def split_image_into_segments(
 
         seg = image[y_start:y_end, :]
         segment_images.append(seg)
-
-        color = (0, 255, 0) if seg_idx % 2 == 0 else (255, 0, 0)
-        cv2.line(debug_img, (0, int(y_end)), (w, int(y_end)), color, 3)
-        cv2.putText(debug_img,
-                    f"Seg {seg_idx+1}: L{start_lap_idx+1}-{end_lap_idx}",
-                    (10, max(20, int(y_end) - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         segment_info.append({
             "segment_id": int(seg_idx + 1),
@@ -207,4 +196,4 @@ def split_image_into_segments(
         })
         prev_end = y_end
 
-    return segment_images, segment_info, debug_img
+    return segment_images, segment_info

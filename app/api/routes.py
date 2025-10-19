@@ -40,30 +40,23 @@ async def split_image(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Could not decode image")
         
         # Split image
-        segment_images, segment_info, debug_img = split_image_into_segments(image)
+        segment_images, segment_info = split_image_into_segments(image)
         
         if not segment_images:
             raise HTTPException(status_code=400, detail="No segments found in image")
         
         # Generate IDs
         split_id = str(uuid.uuid4())
-        debug_id = str(uuid.uuid4())
         
         # Store segment images
         for i, (seg_img, seg_info) in enumerate(zip(segment_images, segment_info)):
             _, buffer = cv2.imencode('.png', seg_img)
             storage.store_segment(f"{split_id}_{i}", buffer.tobytes(), seg_info)
         
-        # Store debug image
-        _, buffer = cv2.imencode('.png', debug_img)
-        debug_id = storage.store_debug_image(buffer.tobytes())
-        
         return {
             "split_id": split_id,
             "total_segments": len(segment_images),
-            "segment_info": segment_info,
-            "debug_url": f"/api/debug/{debug_id}.png",
-            "segment_urls": [f"/api/segment/{split_id}_{i}" for i in range(len(segment_images))]
+            "segment_info": segment_info
         }
         
     except HTTPException:
