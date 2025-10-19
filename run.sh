@@ -160,7 +160,8 @@ echo "Press Ctrl+C to stop the server"
 echo ""
 
 # Run the application with error handling
-if python main.py; then
+echo "🚀 Starting server with virtual environment python..."
+if .venv/bin/python main.py; then
     echo "✅ Server stopped gracefully"
 else
     echo "❌ Server encountered an error"

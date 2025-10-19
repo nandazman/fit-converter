@@ -83,7 +83,7 @@ body {
 .json-toolbar {
     display: flex; gap: 6px; align-items: center; justify-content: flex-end;
     padding: 12px; border-bottom: 1px solid rgba(148,163,184,.1); background: rgba(15,23,42,.8);
-    flex-wrap: wrap;
+    flex-wrap: wrap; position: sticky; top: 0; z-index: 10;
 }
 .json-toolbar .mini-btn {
     background: rgba(148,163,184,.12); border: 1px solid rgba(148,163,184,.25); color: #cbd5e1;
