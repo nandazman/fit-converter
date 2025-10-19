@@ -1,0 +1,74 @@
+name: CI/CD — Swim OCR
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install deps (lint/test stage)
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          python - <<'PY'
+          # smoke import to fail early if code is broken
+          try:
+              import sys
+              sys.path.append('app')
+              import main  # noqa: F401
+              print("Import OK")
+          except Exception as e:
+              raise SystemExit(f"Import failed: {e}")
+          PY
+
+      - name: Prepare SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Rsync project to server
+        run: |
+          rsync -az --delete --exclude=".git" ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/swim-ocr/
+
+      - name: Remote setup & restart service
+        env:
+          SERVICE_NAME: ${{ secrets.SERVICE_NAME || 'swim-ocr' }}
+        run: |
+          ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} 'bash -s' <<'SSHCMDS'
+          set -e
+          cd /opt/swim-ocr
+          # Create/upgrade venv
+          python3 -m venv .venv || true
+          source .venv/bin/activate
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+          # Ensure systemd unit exists (idempotent via deploy.sh if present)
+          if [ -f deploy.sh ]; then
+            bash deploy.sh
+          else
+            sudo systemctl daemon-reload || true
+            sudo systemctl restart swim-ocr || sudo systemctl start swim-ocr || true
+            sudo systemctl enable swim-ocr || true
+          fi
+          SSHCMDS
