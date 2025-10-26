@@ -39,7 +39,7 @@ sudo chown -R $USER:$USER /opt/swim-ocr
 1. **Clone the repository**
    ```bash
    git clone <your-repo-url>
-   cd huawei-swim
+   cd fit-converter
    ```
 
 2. **Install dependencies**
@@ -67,7 +67,7 @@ sudo chown -R $USER:$USER /opt/swim-ocr
 ## 📁 Project Structure
 
 ```
-huawei-swim/
+fit-converter/
 ├── app/
 │   ├── main.py                     # FastAPI application entry point
 │   ├── api/
