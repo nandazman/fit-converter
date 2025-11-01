@@ -110,19 +110,15 @@ jobs:
           EOF
     
     - name: Sync files to server
-      uses: appleboy/ssh-action@v1.0.0
+      uses: appleboy/scp-action@v0.1.7
       with:
         host: ${{ secrets.DEPLOY_HOST }}
         username: ${{ secrets.DEPLOY_USER }}
         key: ${{ secrets.DEPLOY_SSH_KEY }}
-        script: |
-          # Sync application files
-          rsync -avz --delete \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='README.md' \
-            --exclude='REQUIREMENTS.md' \
-            /home/runner/work/fit-converter/fit-converter/ /opt/swim-ocr/
+        source: "app/,static/,requirements.txt"
+        target: "/opt/swim-ocr/"
+        strip_components: 0
+        overwrite: true
     
     - name: Install and restart services
       uses: appleboy/ssh-action@v1.0.0
