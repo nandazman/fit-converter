@@ -5,6 +5,7 @@ Text extraction and parsing functions for swimming data (fixed)
 from __future__ import annotations
 
 import re
+import logging
 from typing import List, Dict, Any, Tuple, Optional
 
 import cv2
@@ -13,6 +14,10 @@ import pytesseract
 from pytesseract import Output
 
 from ..helpers.utils import seconds_to_mmss
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 # =========================
@@ -622,6 +627,9 @@ def extract_swimming_data_v2(image: np.ndarray) -> Tuple[List[Dict[str, Any]], n
 # =========================
 
 def ocr_single_segment(segment_image: np.ndarray, segment_id: int, start_lap: int = 1) -> Dict[str, Any]:
+    logger.info(f"🏊 Starting OCR for segment {segment_id}, start_lap={start_lap}")
+    logger.debug(f"Image shape: {segment_image.shape}, dtype: {segment_image.dtype}")
+
     if len(segment_image.shape) == 3:
         gray = cv2.cvtColor(segment_image, cv2.COLOR_BGR2GRAY)
     else:
@@ -633,8 +641,9 @@ def ocr_single_segment(segment_image: np.ndarray, segment_id: int, start_lap: in
         from ..image_processing.preprocessing import preprocess_for_small_text
         pre, _ = preprocess_for_small_text(segment_image)
         processed_variants.append(("preprocessed", pre))
-    except Exception:
-        pass
+        logger.debug("✅ Added preprocessed variant")
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to preprocess: {e}")
 
     try:
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -642,16 +651,21 @@ def ocr_single_segment(segment_image: np.ndarray, segment_id: int, start_lap: in
         processed_variants.append(("enhanced", enhanced))
         denoised = cv2.fastNlMeansDenoising(gray)
         processed_variants.append(("denoised", denoised))
-    except Exception:
-        pass
+        logger.debug(f"✅ Added enhanced and denoised variants (total: {len(processed_variants)})")
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to create enhanced variants: {e}")
 
     all_laps: List[Dict[str, Any]] = []
 
-    for _, img in processed_variants:
+    for variant_name, img in processed_variants:
+        logger.debug(f"🔍 Trying variant: {variant_name}")
         for psm in (6, 4, 3, 11, 8):
             try:
+                logger.debug(f"  → PSM {psm}: Running image_to_data...")
                 data = pytesseract.image_to_data(img, output_type=Output.DICT, config=f'--psm {psm} --oem 3')
                 segs = parse_ocr_data_structured(data)
+                logger.debug(f"  → PSM {psm}: Structured parsing found {len(segs)} segments")
+
                 if segs:
                     segs = _postprocess_and_sort(segs)
                     for i, s in enumerate(segs):
@@ -660,40 +674,64 @@ def ocr_single_segment(segment_image: np.ndarray, segment_id: int, start_lap: in
                         s["pace_per_100m"] = seconds_to_mmss(s.pop("pace_per_100m_sec", 120))
                         all_laps.append(s)
                     if all_laps:
+                        logger.info(f"✅ SUCCESS with {variant_name} PSM {psm}: {len(all_laps)} laps found")
+                        logger.debug(f"Laps data: {all_laps}")
                         return {"laps": all_laps, "total_laps": len(all_laps)}
 
+                logger.debug(f"  → PSM {psm}: Running image_to_string...")
                 text = pytesseract.image_to_string(img, config=f'--psm {psm} --oem 3')
+                logger.debug(f"  → PSM {psm}: OCR text length: {len(text)} chars")
+                logger.debug(f"  → PSM {psm}: OCR text preview: {text[:200]}")
+
                 if text.strip():
                     lines = [l.strip() for l in text.splitlines() if l.strip()]
+                    logger.debug(f"  → PSM {psm}: {len(lines)} lines after cleanup")
                     tmp: List[Dict[str, Any]] = []
                     for i, _line in enumerate(lines):
                         ctx = "\n".join(lines[max(0, i - 1):min(len(lines), i + 3)])
-                        if not (re.search(r"\bStrokes?\b", ctx, re.IGNORECASE) and
-                                re.search(r"\bSWOLF\b", ctx, re.IGNORECASE)):
+                        has_strokes = bool(re.search(r"\bStrokes?\b", ctx, re.IGNORECASE))
+                        has_swolf = bool(re.search(r"\bSWOLF\b", ctx, re.IGNORECASE))
+
+                        if not (has_strokes and has_swolf):
                             continue
+
+                        logger.debug(f"    Line {i}: Found Strokes & SWOLF markers")
                         lap_m = re.search(r"^\s*(\d{1,3})\b", _line)
                         lap_num = int(lap_m.group(1)) if lap_m else (start_lap + len(tmp))
                         seg = parse_segment_text(ctx, lap_num)
                         if seg:
+                            logger.debug(f"    Line {i}: Parsed segment - lap={seg.get('lap')}, stroke={seg.get('stroke_type')}")
                             tmp.append(seg)
 
                     if tmp:
+                        logger.debug(f"  → PSM {psm}: Parsed {len(tmp)} segments from text")
                         tmp = _postprocess_and_sort(tmp)
                         for i, s in enumerate(tmp):
                             s["lap"] = start_lap + i
                             s["duration"] = seconds_to_mmss(s.pop("duration_sec", 90))
                             s["pace_per_100m"] = seconds_to_mmss(s.pop("pace_per_100m_sec", 120))
                             all_laps.append(s)
+                        logger.info(f"✅ SUCCESS with {variant_name} PSM {psm} text parsing: {len(all_laps)} laps")
+                        logger.debug(f"Laps data: {all_laps}")
                         return {"laps": all_laps, "total_laps": len(all_laps)}
 
+                    logger.debug(f"  → PSM {psm}: Trying single segment parse...")
                     single = parse_segment_text(text, start_lap)
                     if single:
+                        logger.info(f"✅ SUCCESS with {variant_name} PSM {psm} single parse")
                         single["duration"] = seconds_to_mmss(single.pop("duration_sec", 90))
                         single["pace_per_100m"] = seconds_to_mmss(single.pop("pace_per_100m_sec", 120))
+                        logger.debug(f"Single lap data: {single}")
                         return {"laps": [single], "total_laps": 1}
-            except Exception:
+                    else:
+                        logger.debug(f"  → PSM {psm}: Single parse returned None (missing Strokes/SWOLF)")
+
+            except Exception as e:
+                logger.warning(f"  → PSM {psm}: Exception during OCR: {type(e).__name__}: {e}")
                 continue
 
+    logger.error(f"❌ FALLBACK: All OCR attempts failed for segment {segment_id}")
+    logger.error(f"   Tried {len(processed_variants)} variants x 5 PSM modes = {len(processed_variants) * 5} attempts")
     fallback_segment = {
         "lap": start_lap,
         "stroke_type": "Freestyle",
@@ -703,4 +741,5 @@ def ocr_single_segment(segment_image: np.ndarray, segment_id: int, start_lap: in
         "swolf": 115,
         "pace_per_100m": "2:00",
     }
+    logger.warning(f"   Returning default fallback: {fallback_segment}")
     return {"laps": [fallback_segment], "total_laps": 1}

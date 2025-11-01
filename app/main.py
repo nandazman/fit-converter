@@ -3,12 +3,26 @@ Swim OCR App - FastAPI Backend V2
 Modular architecture with separated concerns
 """
 
+import logging
+import sys
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from .api.routes import router
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info("🚀 Starting Swim OCR API v2.0.0")
 
 # Initialize FastAPI app
 app = FastAPI(
