@@ -37,66 +37,45 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    
+
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Deploy to server
+
+    - name: Check if rebuild is needed
+      id: check_rebuild
+      run: |
+        if echo "${{ github.event.head_commit.message }}" | grep -q "(rebuild)"; then
+          echo "rebuild=true" >> $GITHUB_OUTPUT
+          echo "🔨 Rebuild mode detected"
+        else
+          echo "rebuild=false" >> $GITHUB_OUTPUT
+          echo "⚡ Fast deploy mode"
+        fi
+
+    - name: Full server setup (rebuild only)
+      if: steps.check_rebuild.outputs.rebuild == 'true'
       uses: appleboy/ssh-action@v1.0.0
       with:
         host: ${{ secrets.DEPLOY_HOST }}
         username: ${{ secrets.DEPLOY_USER }}
         key: ${{ secrets.DEPLOY_SSH_KEY }}
         script: |
-          # Update system packages
+          echo "🔨 Running full rebuild setup..."
+
+          # Install system packages
           sudo apt update
-          sudo apt install -y tesseract-ocr libtesseract-dev python3-venv nginx
-          
+          sudo apt install -y tesseract-ocr libtesseract-dev python3-venv nginx libgl1 libglib2.0-0
+
           # Create app directory
           sudo mkdir -p /opt/swim-ocr
           sudo chown -R ${{ secrets.DEPLOY_USER }}:${{ secrets.DEPLOY_USER }} /opt/swim-ocr
-          
-          # Install Nginx configuration
-          sudo tee /etc/nginx/sites-available/swim-ocr.conf > /dev/null <<'EOF'
-          server {
-              listen 80;
-              server_name _;
-              
-              location /swim/ {
-                  alias /opt/swim-ocr/static/;
-                  try_files $uri $uri/ /index.html;
-                  index index.html;
-              }
-              
-              location /api/ {
-                  proxy_pass http://127.0.0.1:8000;
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Real-IP $remote_addr;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                  proxy_set_header X-Forwarded-Proto $scheme;
-                  client_max_body_size 20M;
-              }
-              
-              location /healthz {
-                  proxy_pass http://127.0.0.1:8000/healthz;
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Real-IP $remote_addr;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                  proxy_set_header X-Forwarded-Proto $scheme;
-              }
-          }
-          EOF
-          
-          # Enable Nginx site
-          sudo ln -sf /etc/nginx/sites-available/swim-ocr.conf /etc/nginx/sites-enabled/
-          sudo nginx -t
-          
+
           # Create systemd service
           sudo tee /etc/systemd/system/swim-ocr.service > /dev/null <<'EOF'
           [Unit]
           Description=Swim OCR API
           After=network.target
-          
+
           [Service]
           User=${{ secrets.DEPLOY_USER }}
           WorkingDirectory=/opt/swim-ocr
@@ -104,10 +83,13 @@ jobs:
           ExecStart=/opt/swim-ocr/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
           Restart=on-failure
           RestartSec=5
-          
+
           [Install]
           WantedBy=multi-user.target
           EOF
+
+          echo "✅ System packages and service configured"
+          echo "⚠️  Note: Nginx config not modified (manage manually)"
     
     - name: Sync files to server
       uses: appleboy/scp-action@v0.1.7
@@ -120,7 +102,7 @@ jobs:
         strip_components: 0
         overwrite: true
     
-    - name: Install and restart services
+    - name: Install dependencies and restart service
       uses: appleboy/ssh-action@v1.0.0
       with:
         host: ${{ secrets.DEPLOY_HOST }}
@@ -128,24 +110,25 @@ jobs:
         key: ${{ secrets.DEPLOY_SSH_KEY }}
         script: |
           cd /opt/swim-ocr
-          
+
           # Create/update virtual environment
           python3 -m venv .venv
           source .venv/bin/activate
-          
-          # Install dependencies
+
+          # Install Python dependencies
           pip install --upgrade pip
           pip install -r requirements.txt
-          
-          # Reload systemd and restart services
+
+          # Reload systemd and restart service
           sudo systemctl daemon-reload
           sudo systemctl enable swim-ocr
           sudo systemctl restart swim-ocr
-          sudo systemctl reload nginx
-          
+
           # Check service status
           sudo systemctl status swim-ocr --no-pager -l
-          
+
+          echo ""
           echo "🎉 Deployment complete!"
-          echo "📱 App available at: http://$(curl -s ifconfig.me)/swim/"
-          echo "🔍 Health check: http://$(curl -s ifconfig.me)/healthz"
+          echo "📱 App: https://xutopia.site/swim/"
+          echo "🔍 Health: https://xutopia.site/healthz"
+          echo "📊 JSON Viewer: https://xutopia.site/json/"
