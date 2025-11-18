@@ -4,6 +4,7 @@ API route handlers for swimming OCR application
 
 import tempfile
 import uuid
+import logging
 
 import cv2
 import numpy as np
@@ -17,6 +18,7 @@ from ..ocr.text_extractor import ocr_single_segment
 from ..image_processing.image_splitter import split_image_into_segments
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/healthz")
@@ -88,33 +90,63 @@ async def get_segment_image(segment_id: str):
 @router.post("/api/ocr-segment/{segment_id}")
 async def ocr_individual_segment(segment_id: str):
     """OCR a single segment"""
+    logger.info(f"📥 API: OCR request for segment_id={segment_id}")
+
     try:
         segment_data = storage.get_segment(segment_id)
         image_bytes = segment_data["image"]
         info = segment_data["info"]
-        
+
+        logger.debug(f"   Segment info: {info}")
+        logger.debug(f"   Image size: {len(image_bytes)} bytes")
+
         # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
         segment_image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
+
         if segment_image is None:
+            logger.error(f"❌ API: Failed to decode image for segment {segment_id}")
             raise HTTPException(status_code=400, detail="Could not decode segment image")
-        
+
+        logger.debug(f"   Decoded image shape: {segment_image.shape}")
+
         # OCR the segment with proper lap numbering
         start_lap = info.get("start_lap", 1)
+        logger.info(f"   Calling OCR with start_lap={start_lap}, segment_id={info['segment_id']}")
+
         segment = ocr_single_segment(segment_image, info["segment_id"], start_lap)
-        
+
+        # Check if we got default fallback values
+        laps = segment.get("laps", [])
+        if laps and len(laps) > 0:
+            first_lap = laps[0]
+            is_fallback = (
+                first_lap.get("strokes") == 25 and
+                first_lap.get("swolf") == 115 and
+                first_lap.get("duration") == "1:30"
+            )
+            if is_fallback:
+                logger.warning(f"⚠️  API: OCR returned DEFAULT FALLBACK values for segment {segment_id}")
+                logger.warning(f"      This means all OCR attempts failed - check logs above")
+            else:
+                logger.info(f"✅ API: OCR SUCCESS for segment {segment_id}")
+                logger.info(f"      Found {len(laps)} laps with real data")
+                logger.debug(f"      First lap: {first_lap}")
+
+        logger.info(f"📤 API: Returning OCR result for segment {segment_id}")
         return {
             "segment_id": segment_id,
             "segment": segment,
             "info": info
         }
-        
+
     except KeyError:
+        logger.error(f"❌ API: Segment {segment_id} not found in storage")
         raise HTTPException(status_code=404, detail="Segment not found")
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"❌ API: Exception processing segment {segment_id}: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
